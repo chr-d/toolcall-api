@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
 
 const baseUrl = process.env.EVENTS_API_URL ?? "http://localhost:3001";
 
@@ -10,6 +11,14 @@ type EventRecord = {
   location: string;
 };
 
+const upcomingEventsInputSchema = z.object({
+  limit: z.number().int().min(1).max(50).default(10),
+});
+
+const eventInputSchema = z.object({
+  id: z.number().int(),
+});
+
 export const tools: Anthropic.Tool[] = [
   {
     name: "get_upcoming_events",
@@ -20,6 +29,8 @@ export const tools: Anthropic.Tool[] = [
       properties: {
         limit: {
           type: "integer",
+          minimum: 1,
+          maximum: 50,
           description:
             "How many events to return, from 1 to 50. Defaults to 10.",
         },
@@ -64,11 +75,11 @@ async function getEvent(id: number) {
 export async function runTool(name: string, input: unknown): Promise<string> {
   switch (name) {
     case "get_upcoming_events": {
-      const { limit = 10 } = input as { limit?: number };
+      const { limit } = upcomingEventsInputSchema.parse(input);
       return JSON.stringify(await getUpcomingEvents(limit));
     }
     case "get_event": {
-      const { id } = input as { id: number };
+      const { id } = eventInputSchema.parse(input);
       return JSON.stringify(await getEvent(id));
     }
     default:
