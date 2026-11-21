@@ -5,6 +5,10 @@ const client = new Anthropic();
 const model = process.env.LLM_MODEL ?? "claude-haiku-5-5";
 const MAX_STEPS = 5;
 
+export class IncompleteReplyError extends Error {
+  override name = "IncompleteReplyError";
+}
+
 export async function askAssistant(question: string): Promise<string> {
   const messages: Anthropic.MessageParam[] = [
     { role: "user", content: question },
@@ -21,13 +25,21 @@ export async function askAssistant(question: string): Promise<string> {
     messages.push({ role: "assistant", content: message.content });
 
     if (message.stop_reason === "end_turn") {
-      return message.content
+      const reply = message.content
         .filter((block) => block.type === "text")
         .map((block) => block.text)
         .join("");
+      if (!reply.trim()) {
+        throw new IncompleteReplyError(
+          "Assistant ended the turn without a text reply",
+        );
+      }
+      return reply;
     }
     if (message.stop_reason !== "tool_use") {
-      throw new Error(`Unexpected stop reason: ${message.stop_reason}`);
+      throw new IncompleteReplyError(
+        `Unexpected stop reason: ${message.stop_reason}`,
+      );
     }
 
     const toolUses = message.content.filter(
@@ -53,5 +65,7 @@ export async function askAssistant(question: string): Promise<string> {
     messages.push({ role: "user", content: results });
   }
 
-  throw new Error(`No answer after ${MAX_STEPS} steps`);
+  throw new IncompleteReplyError(
+    `Assistant reached the step limit (${MAX_STEPS})`,
+  );
 }

@@ -7,14 +7,6 @@ const requestBodySchema = z.object({
 });
 
 export const callAssistant: RequestHandler = async (req, res) => {
-  const result = requestBodySchema.safeParse(req.body);
-  if (!result.success) {
-    res.status(400).json({
-      error: "Invalid request body",
-      details: result.error.issues,
-    });
-    return;
-  }
-
-  res.json({ reply: await askAssistant(result.data.message) });
+  const { message } = requestBodySchema.parse(req.body);
+  res.json({ reply: await askAssistant(message) });
 };
