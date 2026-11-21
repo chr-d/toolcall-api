@@ -170,10 +170,11 @@ export async function runTool(name: string, input: unknown): Promise<string> {
       const { id } = eventInputSchema.parse(input);
       return JSON.stringify(await getEvent(id));
     }
-    case "create_event":
-      return JSON.stringify(
-        await createEvent(createEventInputSchema.parse(input)),
-      );
+    case "create_event": {
+      const event = await createEvent(createEventInputSchema.parse(input));
+      console.log(`create_event created event ${event.id}`);
+      return JSON.stringify(event);
+    }
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
