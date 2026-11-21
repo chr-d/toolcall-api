@@ -16,6 +16,7 @@ type EventRecord = {
 };
 
 const upcomingEventsInputSchema = z.object({
+  location: z.string().trim().min(1).optional(),
   limit: z.number().int().min(1).max(50).default(10),
 });
 
@@ -24,10 +25,10 @@ const eventInputSchema = z.object({
 });
 
 const createEventInputSchema = z.object({
-  title: z.string().min(3),
+  title: z.string().trim().min(3),
   date: z.iso.datetime(),
-  location: z.string(),
-  description: z.string().optional(),
+  location: z.string().trim(),
+  description: z.string().trim().optional(),
 });
 
 type CreateEventInput = z.infer<typeof createEventInputSchema>;
@@ -36,10 +37,16 @@ export const tools: Anthropic.Tool[] = [
   {
     name: "get_upcoming_events",
     description:
-      "Get upcoming events from the Events API, sorted by date with the soonest first. Each event has an id, title, date (ISO 8601) and location (free text, usually venue, city and country). Use it for any question about what is on, where or when.",
+      "Get upcoming events from the Events API, sorted by date with the soonest first. Pass location when the user asks about a particular place. The tool filters by location before applying the limit. Each event has an id, title, date (ISO 8601) and location.",
     input_schema: {
       type: "object",
       properties: {
+        location: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Optional location query. Matches any part of the event's location, ignoring case.",
+        },
         limit: {
           type: "integer",
           minimum: 1,
@@ -129,9 +136,18 @@ async function fetchEvents<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
-async function getUpcomingEvents(limit: number) {
+async function getUpcomingEvents({
+  limit,
+  location,
+}: z.infer<typeof upcomingEventsInputSchema>) {
   const events = await fetchEvents<EventRecord[]>("/upcoming");
-  return events
+  const locationQuery = location?.toLowerCase();
+  const matchingEvents = locationQuery
+    ? events.filter((event) =>
+        event.location.toLowerCase().includes(locationQuery),
+      )
+    : events;
+  return matchingEvents
     .slice(0, limit)
     .map(({ id, title, date, location }) => ({ id, title, date, location }));
 }
@@ -163,8 +179,8 @@ async function createEvent(input: CreateEventInput) {
 export async function runTool(name: string, input: unknown): Promise<string> {
   switch (name) {
     case "get_upcoming_events": {
-      const { limit } = upcomingEventsInputSchema.parse(input);
-      return JSON.stringify(await getUpcomingEvents(limit));
+      const filters = upcomingEventsInputSchema.parse(input);
+      return JSON.stringify(await getUpcomingEvents(filters));
     }
     case "get_event": {
       const { id } = eventInputSchema.parse(input);
