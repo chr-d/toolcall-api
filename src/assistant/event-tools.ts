@@ -3,6 +3,10 @@ import { z } from "zod";
 
 const baseUrl = process.env.EVENTS_API_URL ?? "http://localhost:3001";
 
+export class EventToolError extends Error {
+  override name = "EventToolError";
+}
+
 type EventRecord = {
   id: number;
   title: string;
@@ -55,20 +59,37 @@ export const tools: Anthropic.Tool[] = [
   },
 ];
 
+async function fetchEvents<T>(path: string): Promise<T> {
+  try {
+    const response = await fetch(`${baseUrl}/api/events/${path}`);
+    if (!response.ok) {
+      const message =
+        response.status >= 500 || response.status === 429
+          ? "The events system is unavailable."
+          : "The events system could not complete the request.";
+      throw new EventToolError(message, {
+        cause: new Error(`Events API returned HTTP ${response.status}`),
+      });
+    }
+    return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof EventToolError) throw error;
+    throw new EventToolError("The events system is unavailable.", {
+      cause: error,
+    });
+  }
+}
+
 async function getUpcomingEvents(limit: number) {
-  const response = await fetch(`${baseUrl}/api/events/upcoming`);
-  if (!response.ok) throw new Error(`Events API returned ${response.status}`);
-  const events = (await response.json()) as EventRecord[];
+  const events = await fetchEvents<EventRecord[]>("upcoming");
   return events
     .slice(0, limit)
     .map(({ id, title, date, location }) => ({ id, title, date, location }));
 }
 
 async function getEvent(id: number) {
-  const response = await fetch(`${baseUrl}/api/events/${id}`);
-  if (!response.ok) throw new Error(`Events API returned ${response.status}`);
-  const event = (await response.json()) as EventRecord | null;
-  if (!event) throw new Error(`No event with id ${id}`);
+  const event = await fetchEvents<EventRecord | null>(String(id));
+  if (event === null) throw new EventToolError(`No event with id ${id}`);
   return event;
 }
 

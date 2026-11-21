@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { runTool, tools } from "./event-tools.ts";
+import { ZodError } from "zod";
+import { EventToolError, runTool, tools } from "./event-tools.ts";
 
 const client = new Anthropic();
 const model = process.env.LLM_MODEL ?? "claude-haiku-5-5";
@@ -18,10 +19,11 @@ export async function askAssistant(question: string): Promise<string> {
     const message = await client.messages.create({
       model,
       max_tokens: 4096,
-      system: `You answer questions about events using your tools. Today is ${new Date().toDateString()}. Do not answer questions or use information outside of the available tools.`,
+      system: `You answer questions about events using your tools. Today is ${new Date().toDateString()}. Do not answer questions or use information outside of the available tools. If a tool reports that the events system is unavailable, explain that the information could not be retrieved.`,
       tools,
       messages,
     });
+    console.log(`Step ${step}: token usage`, message.usage);
     messages.push({ role: "assistant", content: message.content });
 
     if (message.stop_reason === "end_turn") {
@@ -52,7 +54,10 @@ export async function askAssistant(question: string): Promise<string> {
           const content = await runTool(toolUse.name, toolUse.input);
           return { type: "tool_result", tool_use_id: toolUse.id, content };
         } catch (err) {
-          const content = err instanceof Error ? err.message : String(err);
+          console.error(`Step ${step}: ${toolUse.name} failed`, err);
+          let content = "The event tool could not complete the request.";
+          if (err instanceof EventToolError) content = err.message;
+          if (err instanceof ZodError) content = "Invalid input for the event tool.";
           return {
             type: "tool_result",
             tool_use_id: toolUse.id,
