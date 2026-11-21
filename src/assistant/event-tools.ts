@@ -23,6 +23,15 @@ const eventInputSchema = z.object({
   id: z.number().int(),
 });
 
+const createEventInputSchema = z.object({
+  title: z.string().min(3),
+  date: z.iso.datetime(),
+  location: z.string(),
+  description: z.string().optional(),
+});
+
+type CreateEventInput = z.infer<typeof createEventInputSchema>;
+
 export const tools: Anthropic.Tool[] = [
   {
     name: "get_upcoming_events",
@@ -57,11 +66,51 @@ export const tools: Anthropic.Tool[] = [
       required: ["id"],
     },
   },
+  {
+    name: "create_event",
+    description: "Create a single new event.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description: "The event title.",
+        },
+        date: {
+          type: "string",
+          description: "The event date and UTC time in ISO 8601 format.",
+        },
+        location: {
+          type: "string",
+          description: "The event location.",
+        },
+        description: {
+          type: "string",
+          description: "An optional description of the event.",
+        },
+      },
+      required: ["title", "date", "location"],
+      input_examples: [
+        {
+          title: "New Years Party",
+          date: "2026-12-31T19:00:00.000Z",
+          location: "Brandenburger Tor, Berlin, Germany",
+          description: "Lets celebrate the new year together.",
+        },
+        {
+          title: "Music Festival",
+          date: "2027-07-02T22:24:48.713Z",
+          location: "Berlin",
+        },
+      ],
+      additionalProperties: false,
+    },
+  },
 ];
 
-async function fetchEvents<T>(path: string): Promise<T> {
+async function fetchEvents<T>(path: string, init?: RequestInit): Promise<T> {
   try {
-    const response = await fetch(`${baseUrl}/api/events/${path}`);
+    const response = await fetch(`${baseUrl}/api/events${path}`, init);
     if (!response.ok) {
       const message =
         response.status >= 500 || response.status === 429
@@ -81,16 +130,34 @@ async function fetchEvents<T>(path: string): Promise<T> {
 }
 
 async function getUpcomingEvents(limit: number) {
-  const events = await fetchEvents<EventRecord[]>("upcoming");
+  const events = await fetchEvents<EventRecord[]>("/upcoming");
   return events
     .slice(0, limit)
     .map(({ id, title, date, location }) => ({ id, title, date, location }));
 }
 
 async function getEvent(id: number) {
-  const event = await fetchEvents<EventRecord | null>(String(id));
+  const event = await fetchEvents<EventRecord | null>(`/${id}`);
   if (event === null) throw new EventToolError(`No event with id ${id}`);
   return event;
+}
+
+async function createEvent(input: CreateEventInput) {
+  const token = process.env.EVENTS_API_TOKEN;
+  if (!token) {
+    throw new EventToolError("The events system is unavailable.", {
+      cause: new Error("EVENTS_API_TOKEN is required to create events"),
+    });
+  }
+
+  return fetchEvents<EventRecord>("", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
 }
 
 export async function runTool(name: string, input: unknown): Promise<string> {
@@ -103,6 +170,10 @@ export async function runTool(name: string, input: unknown): Promise<string> {
       const { id } = eventInputSchema.parse(input);
       return JSON.stringify(await getEvent(id));
     }
+    case "create_event":
+      return JSON.stringify(
+        await createEvent(createEventInputSchema.parse(input)),
+      );
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
