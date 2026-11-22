@@ -6,12 +6,21 @@ const client = new Anthropic();
 const model = process.env.LLM_MODEL ?? "claude-haiku-5-5";
 const MAX_STEPS = 5;
 
+type ConversationMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 export class IncompleteReplyError extends Error {
   override name = "IncompleteReplyError";
 }
 
-export async function askAssistant(question: string): Promise<string> {
+export async function askAssistant(
+  question: string,
+  history: ConversationMessage[] = [],
+): Promise<string> {
   const messages: Anthropic.MessageParam[] = [
+    ...history,
     { role: "user", content: question },
   ];
 
@@ -19,7 +28,7 @@ export async function askAssistant(question: string): Promise<string> {
     const message = await client.messages.create({
       model,
       max_tokens: 4096,
-      system: `You answer questions about events using your tools. Today is ${new Date().toDateString()}. Do not answer questions or use information outside of the available tools. If a tool reports that the events system is unavailable, explain that the information could not be retrieved.`,
+      system: `You answer questions about events using your tools. Today is ${new Date().toDateString()}. Use prior conversation to understand the latest request, including answers to earlier questions. Answer only event-related requests. Base event details and confirmations on tool results from the current request. If a tool reports that the events system is unavailable, explain that the information could not be retrieved.`,
       tools,
       messages,
     });
@@ -57,7 +66,8 @@ export async function askAssistant(question: string): Promise<string> {
           console.error(`Step ${step}: ${toolUse.name} failed`, err);
           let content = "The event tool could not complete the request.";
           if (err instanceof EventToolError) content = err.message;
-          if (err instanceof ZodError) content = "Invalid input for the event tool.";
+          if (err instanceof ZodError)
+            content = "Invalid input for the event tool.";
           return {
             type: "tool_result",
             tool_use_id: toolUse.id,
