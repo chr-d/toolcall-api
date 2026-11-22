@@ -15,23 +15,54 @@ type EventRecord = {
   location: string;
 };
 
-const upcomingEventsInputSchema = z.object({
+const upcomingEventsInputSchema = z.strictObject({
   location: z.string().trim().min(1).optional(),
   limit: z.number().int().min(1).max(50).default(10),
 });
 
 const eventInputSchema = z.object({
-  id: z.number().int(),
+  id: z.number().int().positive(),
 });
 
-const createEventInputSchema = z.object({
+const createEventInputSchema = z.strictObject({
   title: z.string().trim().min(3),
   date: z.iso.datetime(),
-  location: z.string().trim(),
+  location: z.string().trim().min(1),
   description: z.string().trim().optional(),
 });
 
-type CreateEventInput = z.infer<typeof createEventInputSchema>;
+const updateEventInputSchema = createEventInputSchema
+  .partial()
+  .extend({ id: z.number().int().positive() })
+  .refine(
+    (input) =>
+      Object.entries(input).some(
+        ([field, value]) => field !== "id" && value !== undefined,
+      ),
+    "Provide at least one event field to update",
+  );
+
+const eventFields = {
+  title: {
+    type: "string",
+    minLength: 3,
+    description: "The event title, at least 3 characters.",
+  },
+  date: {
+    type: "string",
+    description:
+      "The event date and time in UTC. Include seconds and a trailing Z, for example 2026-12-31T19:00:00Z.",
+  },
+  location: {
+    type: "string",
+    minLength: 1,
+    description: "The event location.",
+  },
+  description: {
+    type: "string",
+    description: "The event description.",
+  },
+};
 
 export const tools: Anthropic.Tool[] = [
   {
@@ -56,6 +87,7 @@ export const tools: Anthropic.Tool[] = [
         },
       },
       required: [],
+      additionalProperties: false,
     },
   },
   {
@@ -67,6 +99,7 @@ export const tools: Anthropic.Tool[] = [
       properties: {
         id: {
           type: "integer",
+          minimum: 1,
           description: "The event id, as returned by get_upcoming_events",
         },
       },
@@ -78,24 +111,7 @@ export const tools: Anthropic.Tool[] = [
     description: "Create a single new event.",
     input_schema: {
       type: "object",
-      properties: {
-        title: {
-          type: "string",
-          description: "The event title.",
-        },
-        date: {
-          type: "string",
-          description: "The event date and UTC time in ISO 8601 format.",
-        },
-        location: {
-          type: "string",
-          description: "The event location.",
-        },
-        description: {
-          type: "string",
-          description: "An optional description of the event.",
-        },
-      },
+      properties: eventFields,
       required: ["title", "date", "location"],
       input_examples: [
         {
@@ -110,6 +126,24 @@ export const tools: Anthropic.Tool[] = [
           location: "Berlin",
         },
       ],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "update_event",
+    description:
+      "Update a single existing event when the user requests a change. Supply its numeric ID and at least one field the user wants changed. Omitted fields stay as they are. If the event ID is unknown, use the read tools to identify the event or ask the user to clarify.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "integer",
+          minimum: 1,
+          description: "The ID of the existing event.",
+        },
+        ...eventFields,
+      },
+      required: ["id"],
       additionalProperties: false,
     },
   },
@@ -158,22 +192,39 @@ async function getEvent(id: number) {
   return event;
 }
 
-async function createEvent(input: CreateEventInput) {
+function eventWriteHeaders() {
   const token = process.env.EVENTS_API_TOKEN;
   if (!token) {
     throw new EventToolError("The events system is unavailable.", {
-      cause: new Error("EVENTS_API_TOKEN is required to create events"),
+      cause: new Error("EVENTS_API_TOKEN is required to write events"),
     });
   }
 
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function createEvent(input: z.infer<typeof createEventInputSchema>) {
   return fetchEvents<EventRecord>("", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
+    headers: eventWriteHeaders(),
     body: JSON.stringify(input),
   });
+}
+
+async function updateEvent({
+  id,
+  ...changes
+}: z.infer<typeof updateEventInputSchema>) {
+  const event = await fetchEvents<EventRecord | null>(`/${id}`, {
+    method: "PUT",
+    headers: eventWriteHeaders(),
+    body: JSON.stringify(changes),
+  });
+  if (event === null) throw new EventToolError(`No event with id ${id}`);
+  return event;
 }
 
 export async function runTool(name: string, input: unknown): Promise<string> {
@@ -191,6 +242,10 @@ export async function runTool(name: string, input: unknown): Promise<string> {
       console.log(`create_event created event ${event.id}`);
       return JSON.stringify(event);
     }
+    case "update_event":
+      return JSON.stringify(
+        await updateEvent(updateEventInputSchema.parse(input)),
+      );
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
